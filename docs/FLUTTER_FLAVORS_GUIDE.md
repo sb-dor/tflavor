@@ -446,6 +446,34 @@ iOS needs four things per flavor: **build configurations**, a **scheme**, **xcco
 **Podfile** entries. Flutter looks for a scheme named exactly like the flavor, and that scheme's
 configurations must be named `Debug-<flavor>`, `Profile-<flavor>` and `Release-<flavor>`.
 
+### How the pieces connect (read this first)
+
+On Android, `--flavor globex` picks one Gradle product flavor. On iOS it goes through a chain of
+four links, and each step in 6.1–6.5 builds one of them:
+
+```text
+flutter run --flavor globex
+        │
+        ▼
+1. SCHEME "globex"                 (6.5)  "Which configuration do I use?"
+        │                                  Run → Debug-globex, Archive → Release-globex
+        ▼
+2. CONFIGURATION "Debug-globex"    (6.1)  A named set of build settings, copied from Debug.
+        │                                  Points to one .xcconfig file.
+        ▼
+3. .xcconfig FILE                  (6.2)  Plain text settings: KEY = value.
+   Flutter/Debug-globex.xcconfig          ── #include ──► Generated.xcconfig     (Flutter's settings)
+                                          ── #include ──► brands/globex.xcconfig (brand values)
+        ▼
+4. Info.plist                      (6.4)  Reads the values: $(APP_DISPLAY_NAME),
+                                          $(PRODUCT_BUNDLE_IDENTIFIER) → what the phone shows
+```
+
+Think of an xcconfig as the native-iOS version of `config/<flavor>/*.json`: a file of settings that
+Xcode reads at build time. The brand file holds what differs per brand. The per-configuration file
+is three lines that pull Flutter's settings and the brand file together. If any link in the chain is
+missing, the build still starts but uses the wrong (or empty) values.
+
 ### 6.1 Build configurations
 
 In Xcode: open `ios/Runner.xcworkspace` → select the **Runner project** (not the target) → **Info**
@@ -480,10 +508,28 @@ configuration file for `Release-globex` to `Release-globex.xcconfig` (and so on 
 
 Notes:
 
+- **Put every xcconfig in `ios/Flutter/`**, next to `Generated.xcconfig` and the `brands/` folder.
+  `#include` paths are relative to the including file's own folder. A copy in `ios/` cannot find
+  `Generated.xcconfig` or `brands/…`, and Xcode drops those includes **without an error**. The
+  build then fails later with "FLUTTER_ROOT not set" and every brand variable is empty.
+- In Xcode, drag the new files into the **Flutter** group (untick *Copy items if needed*) before
+  choosing them as base configurations. Otherwise it is easy to pick, or create, a copy in the
+  wrong folder.
+- You need **all three** per flavor, `Profile-*` included. A `Profile-globex` left on the plain
+  `Release.xcconfig` gets no brand values.
 - The Pods file name is the configuration name **lower-cased**: `Pods-Runner.release-globex.xcconfig`.
+- `Profile-*` includes the Pods `profile-*` file.
 - Also add `#include "brands/acme.xcconfig"` to the original `Debug.xcconfig`/`Release.xcconfig`, so
   unflavored builds have the variables too.
-- `Profile-*` includes the Pods `profile-*` file.
+
+The finished mapping (Runner target column of Info → Configurations):
+
+| Configuration | Base configuration file |
+| --- | --- |
+| Debug | `Debug.xcconfig` |
+| Release, Profile | `Release.xcconfig` |
+| Debug-acme / Profile-acme / Release-acme | `Debug-acme.xcconfig` / `Profile-acme.xcconfig` / `Release-acme.xcconfig` |
+| Debug-globex / Profile-globex / Release-globex | `Debug-globex.xcconfig` / `Profile-globex.xcconfig` / `Release-globex.xcconfig` |
 
 ### 6.3 Per-configuration target settings
 
@@ -493,6 +539,12 @@ In the Runner target → **Build Settings**, set per configuration:
 | --- | --- | --- |
 | `PRODUCT_BUNDLE_IDENTIFIER` | `com.example.acme` | `com.example.globex` |
 | `ASSETCATALOG_COMPILER_APPICON_NAME` | `AppIcon` | `AppIcon-globex` |
+
+- Set these **in Build Settings**, not in the brand xcconfig. A value set on the target overrides the
+  xcconfig, and a new Flutter project already sets `PRODUCT_BUNDLE_IDENTIFIER` on the target, so an
+  xcconfig value would be silently ignored.
+- Keep `AppIcon` until `Assets.xcassets/AppIcon-globex.appiconset` exists (section 7.1 generates it).
+  Pointing at a missing icon set fails the build.
 
 ### 6.4 Info.plist uses the variables
 
@@ -506,6 +558,10 @@ In the Runner target → **Build Settings**, set per configuration:
 ```
 
 `CFBundleIdentifier` normally already is `$(PRODUCT_BUNDLE_IDENTIFIER)`.
+
+`LAUNCH_SCREEN_STORYBOARD` must name a storyboard that exists in the Runner target. Until you create
+`LaunchScreenGlobex.storyboard` (section 7.2), set it to the existing `LaunchScreen` in the brand
+xcconfig. A missing storyboard gives a blank launch screen.
 
 ### 6.5 Schemes
 
@@ -543,6 +599,10 @@ project 'Runner', {
 
 Then run `cd ios && pod install`. CocoaPods prints "did not set the base configuration…" for the
 new configurations. That is expected, because your xcconfig files already include the Pods files.
+
+**No `ios/Podfile`?** Projects that use Swift Package Manager for plugins (the Xcode project shows
+`FlutterGeneratedPluginSwiftPackage`) have no Podfile. Skip this step. The `#include? "Pods/…"` lines
+in the xcconfigs are harmless: the `?` means "skip if the file is missing".
 
 ### 6.7 Firebase plist per flavor
 
@@ -593,6 +653,41 @@ flutter build ios --simulator --debug --flavor globex
 ```
 
 All three must show the Globex values.
+
+A faster check, without building, shows what Xcode resolves for one configuration (run from `ios/`):
+
+```bash
+xcodebuild -project Runner.xcodeproj -target Runner -configuration Debug-globex -showBuildSettings | grep -E " (APP_BRAND|APP_DISPLAY_NAME|FLUTTER_ROOT|PRODUCT_BUNDLE_IDENTIFIER) ="
+```
+
+All four lines must appear with Globex values. A missing `FLUTTER_ROOT` or `APP_BRAND` means the
+configuration points at the wrong xcconfig, or the xcconfig sits in the wrong folder (6.2). Repeat
+for every `Debug-*`, `Profile-*` and `Release-*` configuration.
+
+### 6.11 Finished checklist
+
+```text
+ios/
+  Flutter/
+    Debug.xcconfig            + #include "brands/acme.xcconfig"
+    Release.xcconfig          + #include "brands/acme.xcconfig"
+    Debug-acme.xcconfig       Profile-acme.xcconfig       Release-acme.xcconfig
+    Debug-globex.xcconfig     Profile-globex.xcconfig     Release-globex.xcconfig
+    brands/acme.xcconfig      brands/globex.xcconfig
+  Runner/Info.plist           $(APP_DISPLAY_NAME), $(LAUNCH_SCREEN_STORYBOARD)
+  Runner.xcodeproj/
+    project.pbxproj           9 configurations, each pointing at its xcconfig (6.2);
+                              bundle ID + icon set per configuration (6.3)
+    xcshareddata/xcschemes/   acme.xcscheme, globex.xcscheme (Shared)
+  Podfile                     configurations listed (6.6), only if you use CocoaPods
+```
+
+- [ ] No xcconfig files directly in `ios/`; all of them in `ios/Flutter/` and in Xcode's Flutter group.
+- [ ] Each of the six flavored configurations points at its **own** xcconfig, `Profile-*` included.
+- [ ] Each flavor has its own bundle ID; the icon set named for it exists.
+- [ ] `Info.plist` uses the variables, and the storyboard it names exists.
+- [ ] Schemes named exactly like the flavors, ticked **Shared**.
+- [ ] The `-showBuildSettings` check above passes for every flavored configuration.
 
 ---
 
@@ -827,6 +922,9 @@ free quota.
 | Release bundle signed with the wrong key | A `signingConfig` on the release **build type** overrides the flavor's. Remove it. |
 | iOS: "The Xcode project does not define custom schemes" / wrong app built | The scheme name must equal the flavor name and be **Shared**. |
 | iOS: plugin/Pods link errors only in flavor builds | Podfile is missing the new configurations. Add them and run `pod install`. |
+| iOS: "FLUTTER_ROOT not set", or `APP_BRAND`/`APP_DISPLAY_NAME` empty | The configuration points at an xcconfig outside `ios/Flutter/`, so its `#include`s silently fail. Move it there and re-select it (6.2). |
+| iOS: one flavor's Profile build has the wrong name or ID | `Profile-<flavor>` still uses `Release.xcconfig`. Give it its own `Profile-<flavor>.xcconfig`. |
+| iOS: bundle ID in the brand xcconfig has no effect | Target Build Settings override xcconfig values. Set the bundle ID per configuration in Build Settings (6.3). |
 | iOS: still shows the old name/icon | `CFBundleDisplayName` hard-coded, or `ASSETCATALOG_COMPILER_APPICON_NAME`/bundle ID not set per configuration. |
 | iOS: crashes report to the wrong Firebase app | One plist copied for all flavors, or the Crashlytics script pinned to `default`. |
 | Flavor-only image missing in tests or web | Flavor-conditional assets are excluded from other flavors. Use `flutter test --flavor x`. Web has no flavors. |

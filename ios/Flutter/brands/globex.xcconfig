@@ -1,0 +1,3 @@
+APP_BRAND = globex
+APP_DISPLAY_NAME = McDonald's
+LAUNCH_SCREEN_STORYBOARD = LaunchScreenGlobex
