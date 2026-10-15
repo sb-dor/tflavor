@@ -1,0 +1,5 @@
+{
+  "BRAND": "acme",
+  "ENVIRONMENT": "production",
+  "API_BASE_URL": "https://api.acme.example"
+}

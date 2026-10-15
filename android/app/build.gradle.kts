@@ -1,7 +1,22 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+}
+
+// Each brand signs its release with its own upload key: android/key-<flavor>.properties.
+// Avera also accepts the original android/key.properties. A brand without a key file
+// builds an unsigned release, which Google Play rejects, so it can never be signed
+// with another brand's key by accident.
+val brandFlavors = listOf("acme", "globex")
+
+fun keystoreFor(flavor: String): Properties? {
+    val file = rootProject.file("key-$flavor.properties")
+    if (!file.exists()) return null
+    return Properties().apply { FileInputStream(file).use { load(it) } }
 }
 
 android {
@@ -16,7 +31,7 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.flutter_flavor_test"
+        applicationId = "com.example.acme"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
@@ -29,11 +44,46 @@ android {
         versionName = flutter.versionName
     }
 
+     signingConfigs {
+        brandFlavors.forEach { flavor ->
+            val p = keystoreFor(flavor) ?: return@forEach
+            create("${flavor}Release") {
+                keyAlias = p["keyAlias"] as String?
+                keyPassword = p["keyPassword"] as String?
+                storeFile = p["storeFile"]?.let { file(it) }
+                storePassword = p["storePassword"] as String?
+            }
+        }
+    }
+
+    flavorDimensions += "brand"
+
+    productFlavors {
+        create("acme") {
+            dimension = "brand"
+            applicationId = "com.example.acme"
+            signingConfig = signingConfigs.findByName("acmeRelease")
+        }
+        create("globex") {
+            dimension = "brand"
+            applicationId = "com.example.globex"
+            signingConfig = signingConfigs.findByName("globexRelease")
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            // no signingConfig here
+            
+            // if necessary
+            // isMinifyEnabled = true
+            // isShrinkResources = true
+            
+            // if the obfuscation is necessary
+            // proguardFiles(
+            //     getDefaultProguardFile("proguard-android-optimize.txt"),
+            //     "proguard-rules.pro",
+            // )
         }
     }
 }

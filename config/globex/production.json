@@ -1,0 +1,5 @@
+{
+  "BRAND": "globex",
+  "ENVIRONMENT": "production",
+  "API_BASE_URL": "https://api.globex.example"
+}
